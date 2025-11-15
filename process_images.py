@@ -1,31 +1,63 @@
 import os
+from collections import Counter
 from PIL import Image
 import numpy as np
 import math
 
 def get_background_color(image, default_color=(0, 0, 0, 0)):
     """
-    Determines the predominant background color of an image by checking its corners.
-    It assumes the subject is centered and the corners represent the background.
+    Determines a suitable background color. First, it checks the corners for a
+    uniform color. If that fails, it analyzes the colors along the border of
+    the image content to find a suitable average color.
 
     Args:
         image (PIL.Image.Image): The image to analyze.
-        default_color (tuple): The color to return if analysis fails.
+        default_color (tuple): The color to return if all analysis fails.
 
     Returns:
-        tuple: An RGBA tuple representing the most common color in the corners.
+        tuple: An RGBA tuple for the calculated background color.
     """
     try:
         width, height = image.size
-        # Sample a 1x1 pixel from each corner
+        # 1. Check corners for a predominant color (fast path for simple backgrounds)
         corners = [image.getpixel((0, 0)), image.getpixel((width - 1, 0)),
                    image.getpixel((0, height - 1)), image.getpixel((width - 1, height - 1))]
-        # Find the most frequent color among the corners
-        return max(set(corners), key=corners.count)
-    except (IndexError, ValueError):
-        return default_color
+        
+        # Use Counter to handle potential non-hashable list of lists in corners
+        corner_counts = Counter(map(tuple, corners))
+        most_common_corner, count = corner_counts.most_common(1)[0]
 
-def make_images_circular(input_dir="images", output_dir="images_circular", frame_width=20, light_source="NW", overlay_frame=True):
+        if count >= 3: # If at least 3 corners match
+            return most_common_corner
+
+        # 2. If corners are not uniform, analyze the perimeter of the image
+        # to find an average color that blends with the subject's edges.
+        border_pixels = []
+        # Top and bottom edges
+        for x in range(width):
+            border_pixels.append(image.getpixel((x, 0)))
+            border_pixels.append(image.getpixel((x, height - 1)))
+        # Left and right edges (excluding corners already added)
+        for y in range(1, height - 1):
+            border_pixels.append(image.getpixel((0, y)))
+            border_pixels.append(image.getpixel((width - 1, y)))
+
+        # Filter for non-transparent pixels to get the subject's edge colors
+        opaque_border_pixels = [p for p in border_pixels if p[3] > 128]
+
+        if opaque_border_pixels:
+            # Calculate the average color of the opaque border pixels
+            avg_r = sum(p[0] for p in opaque_border_pixels) // len(opaque_border_pixels)
+            avg_g = sum(p[1] for p in opaque_border_pixels) // len(opaque_border_pixels)
+            avg_b = sum(p[2] for p in opaque_border_pixels) // len(opaque_border_pixels)
+            return (avg_r, avg_g, avg_b, 255)
+
+    except (IndexError, ValueError):
+        pass # Fall through to default
+
+    return default_color
+
+def make_images_circular(input_dir="images", output_dir="images_circular", frame_width_percent=5.0, light_source="NW", overlay_frame=True):
     """
     Finds all PNG images in an input directory, crops them to their
     content, and transforms them into a circular shape, saving them
@@ -34,7 +66,8 @@ def make_images_circular(input_dir="images", output_dir="images_circular", frame
     Args:
         input_dir (str): Directory containing the source PNG images.
         output_dir (str): Directory where circular images will be saved.
-        frame_width (int): Width of the golden frame in pixels. If 0, no frame.
+        frame_width_percent (float): Width of the golden frame as a percentage
+                                     of the image's diagonal. If 0, no frame.
         light_source (str): Direction of the light source for the frame's
                             3D effect. Accepts "NW", "NE", "SW", "SE", "CE"
                             (Center/Top-down).
@@ -89,6 +122,9 @@ def make_images_circular(input_dir="images", output_dir="images_circular", frame
                     # We'll create a square canvas of this diagonal size.
                     pic_diameter = math.ceil(math.sqrt(width**2 + height**2))
                     pic_radius = pic_diameter / 2
+
+                    # Calculate frame width in pixels from the percentage
+                    frame_width = math.ceil(pic_diameter * (frame_width_percent / 100.0))
  
                     # Create a new square image with a transparent background
                     square_img = Image.new("RGBA", (pic_diameter, pic_diameter), (0, 0, 0, 0))
@@ -191,4 +227,4 @@ def make_images_circular(input_dir="images", output_dir="images_circular", frame
 if __name__ == "__main__":
     # Assuming your images are in a subfolder named 'images'
     # relative to where you run this script.
-    make_images_circular(frame_width=20, light_source="NW", overlay_frame=True)
+    make_images_circular(frame_width_percent=5.0, light_source="NW", overlay_frame=True)
