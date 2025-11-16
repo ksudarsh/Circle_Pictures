@@ -18,6 +18,10 @@ def get_background_color(image, default_color=(0, 0, 0, 0)):
         tuple: An RGBA tuple for the calculated background color.
     """
     try:
+        # Ensure image is RGBA for consistent pixel format
+        if image.mode != 'RGBA':
+            image = image.convert('RGBA')
+
         width, height = image.size
         # 1. Check corners for a predominant color (fast path for simple backgrounds)
         corners = [image.getpixel((0, 0)), image.getpixel((width - 1, 0)),
@@ -56,6 +60,43 @@ def get_background_color(image, default_color=(0, 0, 0, 0)):
         pass # Fall through to default
 
     return default_color
+
+def get_content_radius(image):
+    """
+    Calculates the effective radius of the content in an image by finding the
+    distance from the center to the furthest non-transparent pixel. This helps
+    create a tighter circular crop for non-rectangular content.
+
+    Args:
+        image (PIL.Image.Image): The image to analyze (must be in RGBA mode).
+
+    Returns:
+        int: The calculated radius of the content.
+    """
+    width, height = image.size
+    center_x, center_y = width / 2, height / 2
+
+    # If the corners are transparent, it's likely non-rectangular content.
+    # In this case, we scan for the 'true' radius.
+    corners_transparent = all(
+        image.getpixel((x, y))[3] == 0
+        for x in [0, width - 1] for y in [0, height - 1]
+    )
+
+    if corners_transparent:
+        max_dist_sq = 0
+        img_arr = np.array(image)
+        non_transparent_pts = np.argwhere(img_arr[:, :, 3] > 0)
+        if non_transparent_pts.size > 0:
+            # Calculate squared distance from center for all non-transparent points
+            distances_sq = ((non_transparent_pts[:, 1] - center_x) ** 2 +
+                            (non_transparent_pts[:, 0] - center_y) ** 2)
+            max_dist_sq = np.max(distances_sq)
+        return math.ceil(math.sqrt(max_dist_sq)) if max_dist_sq > 0 else 0
+    else:
+        # For rectangular content, the radius must be half the diagonal
+        # to ensure the corners are not clipped.
+        return math.ceil(math.sqrt(width**2 + height**2) / 2)
 
 def make_images_circular(input_dir="images", output_dir="images_circular", frame_width_percent=5.0, light_source="NW", overlay_frame=True):
     """
@@ -117,16 +158,14 @@ def make_images_circular(input_dir="images", output_dir="images_circular", frame
                         print(f"Skipping '{filename}' as it lacks significant features (<= 4 colors).")
                         continue
  
-                    # To ensure the entire image content fits within the circle without
-                    # clipping corners, the diameter must be the diagonal of the content.
-                    # We'll create a square canvas of this diagonal size.
-                    pic_diameter = math.ceil(math.sqrt(width**2 + height**2))
-                    pic_radius = pic_diameter / 2
+                    # Calculate the radius based on content shape. For circular images, this
+                    # will be tight; for rectangular, it will be half the diagonal.
+                    pic_radius = get_content_radius(cropped_img)
+                    pic_diameter = pic_radius * 2
 
                     # Calculate frame width in pixels from the percentage
                     frame_width = math.ceil(pic_diameter * (frame_width_percent / 100.0))
  
-                    # Create a new square image with a transparent background
                     square_img = Image.new("RGBA", (pic_diameter, pic_diameter), (0, 0, 0, 0))
                     # Calculate coordinates to paste the cropped image at the center
                     paste_x = (pic_diameter - width) // 2
@@ -144,7 +183,7 @@ def make_images_circular(input_dir="images", output_dir="images_circular", frame
                     total_radius = total_diameter / 2
  
                     # b) Determine the predominant background color from the cropped image.
-                    bg_color = get_background_color(cropped_img)
+                    bg_color = get_background_color(cropped_img, default_color=(51, 51, 51, 255))
 
                     # Create the final canvas. Initialize with transparency.
                     final_img = Image.new("RGBA", (total_diameter, total_diameter), (0, 0, 0, 0))
@@ -165,7 +204,7 @@ def make_images_circular(input_dir="images", output_dir="images_circular", frame
                             distance_sq = dx**2 + dy**2 # Use squared distance for performance
 
                             # Pre-calculate squared radii for comparison
-                            pic_radius_sq = pic_radius**2
+                            pic_radius_sq = (pic_radius)**2
                             frame_inner_radius_sq = frame_inner_radius**2 if frame_inner_radius > 0 else 0
                             total_radius_sq = total_radius**2
 
@@ -177,13 +216,13 @@ def make_images_circular(input_dir="images", output_dir="images_circular", frame
                             # Check if the pixel is within the picture's circular area
                             if distance_sq <= pic_radius_sq:
                                 # Map the point in the circle back to the square source image.
-                                # Since both are circles/squares centered at radius, the mapping is direct.
                                 orig_x = int(pic_radius + dx)
                                 orig_y = int(pic_radius + dy)
-                                
-                                # Draw the picture pixel, but only if it's not transparent
-                                # and it's inside the frame's inner boundary (or if frame overlays)
+
+                                # Draw the picture pixel if it's not transparent and inside the frame's
+                                # inner boundary (unless the frame overlays the image).
                                 if not (overlay_frame and distance_sq > frame_inner_radius_sq):
+                                    # Check bounds to be safe
                                     pixel = source_arr[orig_y, orig_x]
                                     if pixel[3] > 0: # Only draw non-transparent pixels
                                         final_arr[y, x] = pixel
