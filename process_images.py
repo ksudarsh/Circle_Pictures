@@ -1,9 +1,12 @@
 import os
 from collections import Counter
-from PIL import Image
+from PIL import Image, ImageTk
 import numpy as np
 import math
-
+try:
+    import tkinter as tk
+except ImportError:
+    import Tkinter as tk
 def get_background_color(image, default_color=(0, 0, 0, 0)):
     """
     Determines a suitable background color. First, it checks the corners for a
@@ -77,7 +80,8 @@ def get_content_radius(image):
     center_x, center_y = width / 2, height / 2
 
     # If the corners are transparent, it's likely non-rectangular content.
-    # In this case, we scan for the 'true' radius.
+    # In this case, we scan for the 'true' radius.s
+    
     corners_transparent = all(
         image.getpixel((x, y))[3] == 0
         for x in [0, width - 1] for y in [0, height - 1]
@@ -98,7 +102,153 @@ def get_content_radius(image):
         # to ensure the corners are not clipped.
         return math.ceil(math.sqrt(width**2 + height**2) / 2)
 
-def make_images_circular(input_dir="images", output_dir="images_circular", frame_width_percent=5.0, light_source="NW", overlay_frame=True):
+class InteractiveImageEditor:
+    def __init__(self, master, original_img, output_path, frame_radius, frame_width, bg_color, light_angle):
+        self.master = master
+        self.original_img = original_img
+        self.output_path = output_path
+        self.frame_radius = frame_radius
+        self.frame_width = frame_width
+        self.bg_color = bg_color
+        self.light_angle = light_angle
+
+        self.zoom = 1.0
+        self.offset_x = 0
+        self.offset_y = 0
+        self.pan_step = 10
+
+        # Determine a sensible canvas size that fits the screen
+        max_dim = self.frame_radius * 2
+        # Limit to 1/4 of screen real estate by using 50% of height
+        screen_height = master.winfo_screenheight() 
+        self.display_size = min(max_dim, int(screen_height * 0.5))
+        
+        self.canvas_size = self.display_size
+        self.canvas = tk.Canvas(master, width=self.canvas_size, height=self.canvas_size)
+        self.canvas.pack()
+
+        # Add a frame for controls
+        control_frame = tk.Frame(master)
+        control_frame.pack(pady=5)
+
+        save_button = tk.Button(control_frame, text="Save and Close", command=self.save_and_close)
+        save_button.pack(side=tk.LEFT, padx=5)
+
+        # Bind keys for interaction
+        # Use 'z' for zoom in to avoid conflict with 'i' in input fields
+        master.bind("<KeyPress-z>", self.zoom_in)
+        master.bind("<KeyPress-o>", self.zoom_out)
+        master.bind("<KeyPress-Up>", self.pan_up)
+        master.bind("<KeyPress-Down>", self.pan_down)
+        master.bind("<KeyPress-Left>", self.pan_left)
+        master.bind("<KeyPress-Right>", self.pan_right)
+
+        # Pre-render the static frame overlay for performance
+        self.frame_overlay = self._create_frame_overlay()
+
+        self.redraw()
+
+    def _create_frame_overlay(self):
+        """Creates the frame as a static overlay with a transparent center."""
+        image_diameter = self.frame_radius * 2
+        center = self.frame_radius
+        frame_inner_radius = self.frame_radius - self.frame_width
+        gold_color = np.array([197, 148, 31])
+
+        # Start with a transparent canvas
+        frame_arr = np.zeros((image_diameter, image_diameter, 4), dtype=np.uint8)
+
+        for y in range(image_diameter):
+            for x in range(image_diameter):
+                dx, dy = x - center, y - center
+                distance_sq = dx**2 + dy**2
+
+                # Draw the frame area
+                if frame_inner_radius**2 < distance_sq <= self.frame_radius**2:
+                    distance = math.sqrt(distance_sq)
+                    dist_from_inner_edge = distance - frame_inner_radius
+                    ridge_pos = (dist_from_inner_edge / self.frame_width) - 0.5
+                    ridge_val = (math.cos(ridge_pos * math.pi) + 1) / 2
+                    ridge_multiplier = 0.4 + ridge_val * 1.5
+
+                    light_multiplier = 1.0
+                    if self.light_angle is not None:
+                        pixel_angle = math.atan2(-dy, dx)
+                        angle_diff = math.cos(pixel_angle - self.light_angle)
+                        light_multiplier = 1.0 + angle_diff * 0.7
+
+                    final_multiplier = ridge_multiplier * light_multiplier
+                    frame_color = np.clip(gold_color * final_multiplier, 0, 255).astype(np.uint8)
+                    frame_arr[y, x] = [frame_color[0], frame_color[1], frame_color[2], 255]
+        
+        return Image.fromarray(frame_arr)
+
+    def redraw(self):
+        image_diameter = self.frame_radius * 2
+        
+        # 1. Create a transparent background layer. The bg_color will fill the space
+        #    between the image and the frame.
+        composite_img = Image.new("RGBA", (image_diameter, image_diameter), self.bg_color)
+
+        # 2. Paste the scaled and panned user image onto the composite image
+        scaled_width = int(self.original_img.width * self.zoom)
+        scaled_height = int(self.original_img.height * self.zoom)
+        scaled_img = self.original_img.resize((scaled_width, scaled_height), Image.LANCZOS)
+        paste_x = (image_diameter - scaled_width) // 2 + self.offset_x
+        paste_y = (image_diameter - scaled_height) // 2 + self.offset_y
+        composite_img.paste(scaled_img, (paste_x, paste_y), scaled_img if scaled_img.mode == 'RGBA' else None)
+
+        # 3. Paste the pre-rendered frame on top
+        # The frame overlay already has transparency, so it composites correctly.
+        composite_img.paste(self.frame_overlay, (0, 0), self.frame_overlay) 
+        self.final_image_to_save = composite_img
+
+        # 4. Scale the result for display in the GUI and update the canvas
+        display_image = self.final_image_to_save.resize((self.display_size, self.display_size), Image.LANCZOS)
+        self.tk_image = ImageTk.PhotoImage(display_image)
+        self.canvas.create_image(0, 0, anchor=tk.NW, image=self.tk_image)
+
+    def zoom_in(self, event):
+        self.zoom *= 1.1
+        self.redraw()
+
+    def zoom_out(self, event):
+        self.zoom /= 1.1
+        self.redraw()
+
+    def pan_up(self, event): self.offset_y -= self.pan_step; self.redraw()
+    def pan_down(self, event): self.offset_y += self.pan_step; self.redraw()
+    def pan_left(self, event): self.offset_x -= self.pan_step; self.redraw()
+    def pan_right(self, event): self.offset_x += self.pan_step; self.redraw()
+
+    def save_and_close(self):
+        # Before saving, create a final circular mask to ensure everything
+        # outside the frame is transparent.
+        image_diameter = self.frame_radius * 2
+        final_mask = Image.new("L", (image_diameter, image_diameter), 0)
+        mask_arr = np.array(final_mask)
+        center = self.frame_radius
+        radius_sq = self.frame_radius**2
+
+        for y in range(image_diameter):
+            for x in range(image_diameter):
+                if (x - center)**2 + (y - center)**2 <= radius_sq:
+                    mask_arr[y, x] = 255
+        
+        final_mask = Image.fromarray(mask_arr)
+        self.final_image_to_save.putalpha(final_mask)
+
+        self.final_image_to_save.save(self.output_path)
+        print(f"Saved adjusted image to '{self.output_path}'")
+        self.master.destroy()
+
+def launch_interactive_editor(image, output_path, frame_radius, frame_width, bg_color, light_angle):
+    root = tk.Tk()
+    root.title("Interactive Image Adjuster")
+    app = InteractiveImageEditor(root, image, output_path, frame_radius, frame_width, bg_color, light_angle)
+    root.mainloop()
+
+def make_images_circular(input_dir="images", output_dir="images_circular", frame_width_percent=5.0, light_source="NW", overlay_frame=False):
     """
     Finds all PNG images in an input directory, crops them to their
     content, and transforms them into a circular shape, saving them
@@ -111,9 +261,8 @@ def make_images_circular(input_dir="images", output_dir="images_circular", frame
                                      of the image's diagonal. If 0, no frame.
         light_source (str): Direction of the light source for the frame's
                             3D effect. Accepts "NW", "NE", "SW", "SE", "CE"
-                            (Center/Top-down).
-        overlay_frame (bool): If True, the frame is drawn on top of the image's
-                              outer edge. If False, it's added around the image.
+                            (Center/Top-down). (Note: overlay_frame is deprecated
+                            in favor of a more robust interactive mode).
     """
     if not os.path.isdir(input_dir):
         print(f"Error: Input directory '{input_dir}' not found.")
@@ -162,103 +311,83 @@ def make_images_circular(input_dir="images", output_dir="images_circular", frame
                     # will be tight; for rectangular, it will be half the diagonal.
                     pic_radius = get_content_radius(cropped_img)
                     pic_diameter = pic_radius * 2
-
+                    
                     # Calculate frame width in pixels from the percentage
                     frame_width = math.ceil(pic_diameter * (frame_width_percent / 100.0))
  
-                    square_img = Image.new("RGBA", (pic_diameter, pic_diameter), (0, 0, 0, 0))
-                    # Calculate coordinates to paste the cropped image at the center
-                    paste_x = (pic_diameter - width) // 2
-                    paste_y = (pic_diameter - height) // 2
-                    square_img.paste(cropped_img, (paste_x, paste_y))
- 
-                    # Determine total size and frame boundaries based on overlay setting
-                    if overlay_frame:
-                        total_diameter = pic_diameter
-                        frame_inner_radius = pic_radius - frame_width
-                    else:
-                        total_diameter = pic_diameter + (frame_width * 2)
-                        frame_inner_radius = pic_radius
+                    # The frame is now always added around the picture content.
+                    total_diameter = pic_diameter + (frame_width * 2)
+                    frame_inner_radius = pic_radius
  
                     total_radius = total_diameter / 2
  
-                    # b) Determine the predominant background color from the cropped image.
-                    bg_color = get_background_color(cropped_img, default_color=(51, 51, 51, 255))
+                    # b) Determine a fill color for the background.
+                    # First, try to get a background color from the edges.
+                    bg_color = get_background_color(cropped_img, default_color=None)
 
-                    # Create the final canvas. Initialize with transparency.
-                    final_img = Image.new("RGBA", (total_diameter, total_diameter), (0, 0, 0, 0))
-                    
-                    source_arr = np.array(square_img)
-                    final_arr = np.array(final_img)
+                    # If no edge color was found, calculate the average color of the content itself.
+                    # This is used to fill transparent gaps between the content and the frame.
+                    if bg_color is None:
+                        opaque_pixels = [p for p in cropped_img.getdata() if p[3] > 128]
+                        if opaque_pixels:
+                            avg_r = sum(p[0] for p in opaque_pixels) // len(opaque_pixels)
+                            avg_g = sum(p[1] for p in opaque_pixels) // len(opaque_pixels)
+                            avg_b = sum(p[2] for p in opaque_pixels) // len(opaque_pixels)
+                            bg_color = (avg_r, avg_g, avg_b, 255)
+                        else: # Fallback for fully transparent cropped images
+                            bg_color = (51, 51, 51, 255)
 
-                    # Center of the new circular image
-                    center_x, center_y = total_radius, total_radius
+                    # Create the final canvas for the automatic result.
+                    # The area between the image and the frame is filled with the bg_color.
+                    final_img = Image.new("RGBA", (total_diameter, total_diameter), bg_color)
+                    # Paste the cropped image in the center
+                    final_img.paste(cropped_img, ((total_diameter - width) // 2, (total_diameter - height) // 2), cropped_img)
 
-                    # Base color for the golden frame
-                    gold_color = np.array([197, 148, 31]) # A richer, deeper gold color
-
+                    # Create a circular mask and apply it
+                    mask = Image.new('L', (total_diameter, total_diameter), 0)
+                    mask_arr = np.array(mask)
+                    center = total_radius
+                    radius_sq = total_radius**2
                     for y in range(total_diameter):
                         for x in range(total_diameter):
-                            # Calculate distance from the center of the new image
-                            dx, dy = x - center_x, y - center_y
-                            distance_sq = dx**2 + dy**2 # Use squared distance for performance
+                            if (x - center)**2 + (y - center)**2 <= radius_sq:
+                                mask_arr[y, x] = 255
+                    mask = Image.fromarray(mask_arr)
+                    final_img.putalpha(mask)
 
-                            # Pre-calculate squared radii for comparison
-                            pic_radius_sq = (pic_radius)**2
-                            frame_inner_radius_sq = frame_inner_radius**2 if frame_inner_radius > 0 else 0
-                            total_radius_sq = total_radius**2
+                    # Ask user for action
+                    while True:
+                        prompt = (f"\nAction for '{filename}':\n"
+                                  "  (y) Save automatically\n"
+                                  "  (v) View automatic result\n"
+                                  "  (e) Edit manually\n" 
+                                  "  (s) Skip this file [default]\n"
+                                  "  (q) Quit program\n"
+                                  "Choose an option (y/v/e/q) or press Enter to skip: ")
+                        answer = input(prompt).lower()
 
-                            # Fill background color inside the frame area first
-                            if distance_sq <= total_radius_sq:
-                                final_arr[y, x] = bg_color
-
-                            # --- Draw the circular picture content ---
-                            # Check if the pixel is within the picture's circular area
-                            if distance_sq <= pic_radius_sq:
-                                # Map the point in the circle back to the square source image.
-                                orig_x = int(pic_radius + dx)
-                                orig_y = int(pic_radius + dy)
-
-                                # Draw the picture pixel if it's not transparent and inside the frame's
-                                # inner boundary (unless the frame overlays the image).
-                                if not (overlay_frame and distance_sq > frame_inner_radius_sq):
-                                    # Check bounds to be safe
-                                    pixel = source_arr[orig_y, orig_x]
-                                    if pixel[3] > 0: # Only draw non-transparent pixels
-                                        final_arr[y, x] = pixel
-
-                            # --- Draw the golden frame ---
-                            # The frame is drawn between its inner radius and the total radius
-                            if frame_width > 0 and frame_inner_radius_sq < distance_sq <= total_radius_sq:
-                                distance = math.sqrt(distance_sq) # Calculate true distance only when needed
-                                # 1. Calculate ridge effect (brighter in the middle of the frame)
-                                dist_from_inner_edge = distance - frame_inner_radius
-                                # Normalize from -0.5 (inner) to 0.5 (outer) across the frame width
-                                ridge_pos = (dist_from_inner_edge / frame_width) - 0.5
-                                # Use cosine for a smooth curve, peaking at the center (ridge_pos=0)
-                                ridge_val = (math.cos(ridge_pos * math.pi) + 1) / 2  # Range 0..1
-                                ridge_multiplier = 0.4 + ridge_val * 1.5 # Remap to 0.4..1.9 for very high contrast
-
-                                # 2. Calculate lighting effect (highlight/shadow)
-                                light_multiplier = 1.0
-                                if light_angle is not None: # Not 'CE'
-                                    pixel_angle = math.atan2(-dy, dx)
-                                    # Cosine of angle difference determines highlight
-                                    angle_diff = math.cos(pixel_angle - light_angle) # Range -1..1
-                                    # Map cos result to a stronger brightness multiplier (e.g., 0.3..1.7)
-                                    light_multiplier = 1.0 + angle_diff * 0.7
-
-                                # 3. Combine effects and calculate final color
-                                final_multiplier = ridge_multiplier * light_multiplier
-                                frame_color = np.clip(gold_color * final_multiplier, 0, 255).astype(np.uint8)
-                                
-                                # Assign RGBA value
-                                final_arr[y, x] = [frame_color[0], frame_color[1], frame_color[2], 255]
-
-                    # Convert the numpy array back to an image and save it
-                    result_img = Image.fromarray(final_arr)
-                    result_img.save(output_path)
-                    print(f"Processed '{filename}' and saved to '{output_path}'")
+                        if answer in ['y', 'yes']:
+                            final_img.save(output_path)
+                            print(f"Saved '{filename}' to '{output_path}'")
+                            break
+                        elif answer in ['v', 'view']:
+                            print("Showing automatic result. Close the image window to continue...")
+                            final_img.show(title=f"Automatic Result for {filename}")
+                            # Loop continues, asking for a new action after viewing.
+                        elif answer in ['e', 'edit']:
+                            print("Launching interactive editor... (Use arrows to pan, 'z'/'o' to zoom)")
+                            # The interactive editor places the frame around the content,
+                            # so the frame radius is the picture radius.
+                            launch_interactive_editor(cropped_img, output_path, pic_radius, frame_width, bg_color, light_angle)
+                            break
+                        elif answer in ['s', 'skip', '']: # Empty string for Enter key
+                            print(f"Skipped '{filename}'.")
+                            break
+                        elif answer in ['q', 'quit']:
+                            print("Quitting program.")
+                            return # Exit the entire function
+                        else:
+                            print("Invalid input. Please choose one of the options.")
 
             except Exception as e:
                 print(f"Could not process '{filename}'. Error: {e}")
@@ -266,4 +395,4 @@ def make_images_circular(input_dir="images", output_dir="images_circular", frame
 if __name__ == "__main__":
     # Assuming your images are in a subfolder named 'images'
     # relative to where you run this script.
-    make_images_circular(frame_width_percent=5.0, light_source="NW", overlay_frame=True)
+    make_images_circular(frame_width_percent=5.0, light_source="NW")
