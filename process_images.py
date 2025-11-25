@@ -266,6 +266,13 @@ def make_images_circular(input_dir="images", output_dir="images_circular", frame
     """
     if not os.path.isdir(input_dir):
         print(f"Error: Input directory '{input_dir}' not found.")
+        print("Please create an 'images' directory and place your PNG files inside it.")
+        return
+
+    image_files = [f for f in os.listdir(input_dir) if f.lower().endswith(".png")]
+    if not image_files:
+        print(f"No PNG images found in the '{input_dir}' directory.")
+        print(f"Error: Input directory '{input_dir}' not found.")
         return
 
     if not os.path.exists(output_dir):
@@ -282,8 +289,8 @@ def make_images_circular(input_dir="images", output_dir="images_circular", frame
     }
     light_angle = light_angles.get(light_source.upper())
 
-    for filename in os.listdir(input_dir):
-        if filename.lower().endswith(".png"):
+    print(f"Found {len(image_files)} PNG image(s) to process.")
+    for filename in image_files:
             input_path = os.path.join(input_dir, filename)
             output_path = os.path.join(output_dir, filename)
 
@@ -393,6 +400,13 @@ def make_images_circular(input_dir="images", output_dir="images_circular", frame
                 print(f"Could not process '{filename}'. Error: {e}")
 
 if __name__ == "__main__":
+    # Check for tkinter availability before starting
+    try:
+        import tkinter
+    except ImportError:
+        print("Error: tkinter is not installed or available.")
+        print("Please install it to run the interactive editor (e.g., 'pip install tk').")
+        exit()
     # Assuming your images are in a subfolder named 'images'
     # relative to where you run this script.
     make_images_circular(frame_width_percent=5.0, light_source="NW")
