@@ -136,8 +136,10 @@ class InteractiveImageEditor:
 
         # Bind keys for interaction
         # Use 'z' for zoom in to avoid conflict with 'i' in input fields
-        master.bind("<KeyPress-z>", self.zoom_in)
-        master.bind("<KeyPress-o>", self.zoom_out)
+        master.bind("<KeyPress-z>", lambda e: self.zoom_in(e, small_step=True))
+        master.bind("<KeyPress-o>", lambda e: self.zoom_out(e, small_step=True))
+        master.bind("<KeyPress-Z>", lambda e: self.zoom_in(e, small_step=False))
+        master.bind("<KeyPress-O>", lambda e: self.zoom_out(e, small_step=False))
         master.bind("<KeyPress-Up>", self.pan_up)
         master.bind("<KeyPress-Down>", self.pan_down)
         master.bind("<KeyPress-Left>", self.pan_left)
@@ -208,12 +210,18 @@ class InteractiveImageEditor:
         self.tk_image = ImageTk.PhotoImage(display_image)
         self.canvas.create_image(0, 0, anchor=tk.NW, image=self.tk_image)
 
-    def zoom_in(self, event):
-        self.zoom *= 1.1
+    def zoom_in(self, event, small_step=True):
+        if small_step:
+            self.zoom *= 1.02 # Tiny zoom
+        else:
+            self.zoom *= 2.0 # Large zoom (100% increase)
         self.redraw()
 
-    def zoom_out(self, event):
-        self.zoom /= 1.1
+    def zoom_out(self, event, small_step=True):
+        if small_step:
+            self.zoom /= 1.02 # Tiny zoom
+        else:
+            self.zoom /= 2.0 # Large zoom
         self.redraw()
 
     def pan_up(self, event): self.offset_y -= self.pan_step; self.redraw()
@@ -381,7 +389,7 @@ def make_images_circular(input_dir="images", output_dir="images_circular", frame
                             print("Showing automatic result. Close the image window to continue...")
                             final_img.show(title=f"Automatic Result for {filename}")
                             # Loop continues, asking for a new action after viewing.
-                        elif answer in ['e', 'edit']:
+                        elif answer in ['e', 'edit']: # pragma: no cover
                             print("Launching interactive editor... (Use arrows to pan, 'z'/'o' to zoom)")
                             # The interactive editor places the frame around the content,
                             # so the frame radius is the picture radius.
