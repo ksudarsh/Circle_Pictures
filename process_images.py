@@ -1,6 +1,6 @@
 import os
 from collections import Counter
-from PIL import Image, ImageTk
+from PIL import Image, ImageTk, ImageFilter
 import numpy as np
 import math
 try:
@@ -63,6 +63,71 @@ def get_background_color(image, default_color=(0, 0, 0, 0)):
         pass # Fall through to default
 
     return default_color
+
+def make_square(image, method='blur'):
+    """
+    Converts the image to a square by extending the background.
+
+    Args:
+        image (PIL.Image.Image): Source image.
+        method (str): 'blur' (fill with blurred original) or 'extend' (stretch edges).
+
+    Returns:
+        PIL.Image.Image: Squared image.
+    """
+    width, height = image.size
+    if width == height:
+        return image
+
+    size = max(width, height)
+    new_img = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+
+    if method == 'blur':
+        # Scale image to fill the square (maintain aspect ratio)
+        ratio = size / min(width, height)
+        new_w = int(width * ratio)
+        new_h = int(height * ratio)
+        bg = image.resize((new_w, new_h), Image.LANCZOS)
+
+        # Center crop the background
+        left = (new_w - size) // 2
+        top = (new_h - size) // 2
+        bg = bg.crop((left, top, left + size, top + size))
+
+        # Blur the background
+        bg = bg.filter(ImageFilter.GaussianBlur(radius=30))
+        new_img.paste(bg, (0, 0))
+
+    elif method == 'extend':
+        # Calculate position to paste original
+        paste_x = (size - width) // 2
+        paste_y = (size - height) // 2
+
+        if height > width: # Portrait - extend sides
+            # Left extension
+            if paste_x > 0:
+                left_col = image.crop((0, 0, 1, height))
+                new_img.paste(left_col.resize((paste_x, height), Image.NEAREST), (0, paste_y))
+            # Right extension
+            if paste_x + width < size:
+                right_col = image.crop((width - 1, 0, width, height))
+                new_img.paste(right_col.resize((size - (paste_x + width), height), Image.NEAREST), (paste_x + width, paste_y))
+        elif width > height: # Landscape - extend top/bottom
+            # Top extension
+            if paste_y > 0:
+                top_row = image.crop((0, 0, width, 1))
+                new_img.paste(top_row.resize((width, paste_y), Image.NEAREST), (paste_x, 0))
+            # Bottom extension
+            if paste_y + height < size:
+                bottom_row = image.crop((0, height - 1, width, height))
+                new_img.paste(bottom_row.resize((width, size - (paste_y + height)), Image.NEAREST), (paste_x, paste_y + height))
+
+    # Paste original in center
+    paste_x = (size - width) // 2
+    paste_y = (size - height) // 2
+    new_img.paste(image, (paste_x, paste_y), image if image.mode == 'RGBA' else None)
+
+    return new_img
 
 def get_content_radius(image):
     """
@@ -312,6 +377,24 @@ def make_images_circular(input_dir="images", output_dir="images_circular", frame
 
                     # Crop the image to the content.
                     cropped_img = img.crop(bbox)
+
+                    # Interactive squaring logic
+                    if cropped_img.width != cropped_img.height:
+                        print(f"Image '{filename}' is not square ({cropped_img.width}x{cropped_img.height}).")
+                        print("Displaying raw image...")
+                        cropped_img.show(title=f"Raw: {filename}")
+
+                        print(f"Select squaring method for '{filename}':")
+                        print("  (b) Blur - Fill sides with blurred version of image")
+                        print("  (e) Extend - Stretch edge pixels")
+                        print("  (n) None - Keep original aspect ratio [default]")
+                        sq_choice = input("Choice: ").lower()
+
+                        method = 'blur' if sq_choice in ['b', 'blur'] else 'extend' if sq_choice in ['e', 'extend'] else None
+
+                        if method:
+                            cropped_img = make_square(cropped_img, method)
+
                     width, height = cropped_img.size
 
                     # a) Evaluate if the picture has significant features.
@@ -417,4 +500,5 @@ if __name__ == "__main__":
         exit()
     # Assuming your images are in a subfolder named 'images'
     # relative to where you run this script.
+
     make_images_circular(frame_width_percent=5.0, light_source="NW")
