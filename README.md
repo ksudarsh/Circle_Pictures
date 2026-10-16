@@ -1,4 +1,4 @@
-> **Archived 2026-10-16.** This project now lives in the Parakalamatham website repository (`ksudarsh/Parakalamatham_Website`) at `tools/circle-pictures/ (code; the portrait images are kept outside Git)`, with its full history. This repository is kept read-only for reference.
+> **Archived 2026-10-16.** The code from this project (`process_images.py`, README, requirements) was copied into the Parakalamatham website repository (`ksudarsh/Parakalamatham_Website`) at `tools/circle-pictures/`; the circular portraits are kept outside Git. This repository keeps the full history and images, read-only.
 
 # Circle Pictures
 
