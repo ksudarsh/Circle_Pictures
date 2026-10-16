@@ -1,3 +1,5 @@
+> **Archived 2026-10-16.** This project now lives in the Parakalamatham website repository (`ksudarsh/Parakalamatham_Website`) at `tools/circle-pictures/ (code; the portrait images are kept outside Git)`, with its full history. This repository is kept read-only for reference.
+
 # Circle Pictures
 
 Interactive tool to frame PNG images in a circular, gold-rimmed frame and manually fill gaps using tiled samples.
